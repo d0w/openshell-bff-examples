@@ -1,3 +1,12 @@
+// Package main is a downstream BFF that reuses 100% of upstream's code.
+//
+// It adds nothing, overrides nothing, and decorates nothing. Every symbol
+// below — server.ServerConfig, server.Services, server.NewServer,
+// services.NewDefaultGatewayService, services.NewDefaultSandboxService —
+// is imported directly from the upstream module. This file is the "does
+// upstream's boilerplate work as-is for a consumer that wants zero
+// changes?" baseline. See downstream-partialreuse for what interface
+// decoration looks like once downstream needs to diverge.
 package main
 
 import (
@@ -11,8 +20,7 @@ import (
 	"time"
 
 	"github.com/d0w/openshell-bff-examples/upstream/pkg/server"
-	gateway "github.com/d0w/openshell-bff-examples/upstream/pkg/services/gateway"
-	sandbox "github.com/d0w/openshell-bff-examples/upstream/pkg/services/sandbox"
+	"github.com/d0w/openshell-bff-examples/upstream/pkg/services"
 )
 
 func main() {
@@ -31,8 +39,8 @@ func main() {
 	}
 
 	svcs := server.Services{
-		Gateway: gateway.NewDefaultGatewayService(),
-		Sandbox: sandbox.NewDefaultSandboxService(),
+		Gateway: services.NewDefaultGatewayService(),
+		Sandbox: services.NewDefaultSandboxService(),
 	}
 
 	srv := server.NewServer(cfg, svcs)

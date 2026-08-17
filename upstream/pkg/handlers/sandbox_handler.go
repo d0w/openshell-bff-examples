@@ -5,22 +5,22 @@ import (
 	"log/slog"
 	"net/http"
 
-	sandbox "github.com/d0w/openshell-bff-examples/upstream/pkg/services/sandbox"
+	"github.com/d0w/openshell-bff-examples/upstream/pkg/services"
 
 	"github.com/go-chi/chi/v5"
 )
 
 // SandboxHandler exposes HTTP endpoints for sandbox CRUD operations.
 type SandboxHandler struct {
-	*Handler                              // gives access to h.logger and other shared fields
-	sandboxService sandbox.SandboxService // service interface
+	*Handler                               // gives access to h.logger and other shared fields
+	sandboxService services.SandboxService // service interface
 }
 
 // NewSandboxHandler constructs a SandboxHandler backed by the given service.
 // Because it depends only on the SandboxService interface, any downstream
 // decorator that satisfies the interface can be passed in here unmodified
 // -- this handler never needs to be rewritten to pick up decorated behavior.
-func NewSandboxHandler(svc sandbox.SandboxService) *SandboxHandler {
+func NewSandboxHandler(svc services.SandboxService) *SandboxHandler {
 	return &SandboxHandler{
 		Handler:        &Handler{logger: slog.Default()},
 		sandboxService: svc,

@@ -25,21 +25,25 @@ does **not** work here, on purpose (see below).
 
 ## How it works
 
-`pkg/sandbox/decorator.go` embeds `upstreamsandbox.SandboxService` and
+`pkg/services/sandbox.go` embeds `upstreamservices.SandboxService` and
 overrides only `CreateSandbox`:
 
 ```go
 type Service struct {
-    upstreamsandbox.SandboxService // embedded — inherits Get/List/Delete as-is
+    upstreamservices.SandboxService // embedded — inherits Get/List/Delete as-is
     logger *slog.Logger
 }
 
-func (s *Service) CreateSandbox(ctx context.Context, name string) (*upstreamsandbox.Sandbox, error) {
+func (s *Service) CreateSandbox(ctx context.Context, name string) (*upstreamservices.Sandbox, error) {
     sb, err := s.SandboxService.CreateSandbox(ctx, name) // delegate to upstream
     // ...tag it, change status...
     return sb, err
 }
 ```
+
+Note this repo's own `pkg/services` package is unrelated to (and imported
+alongside, under a different alias, in) upstream's `pkg/services` — same
+package name, different module. See "Package naming" below.
 
 `GetSandbox`, `ListSandboxes`, and `DeleteSandbox` are never redefined —
 calls fall straight through to the embedded upstream implementation. Try
@@ -52,9 +56,9 @@ and `SandboxHandler` completely unmodified — it only swaps in the
 decorated service:
 
 ```go
-base := upstreamsandbox.NewDefaultSandboxService()
-decorated := downstreamsandbox.NewService(base)
-svcs := server.Services{Gateway: gateway.NewDefaultGatewayService(), Sandbox: decorated}
+base := upstreamservices.NewDefaultSandboxService()
+decorated := downstreamservices.NewService(base)
+svcs := server.Services{Gateway: upstreamservices.NewDefaultGatewayService(), Sandbox: decorated}
 ```
 
 Gateway isn't customized at all here, same as `../downstream-reuse`.
@@ -73,12 +77,12 @@ srv := server.NewServer(cfg, svcs,
     server.WithRoutes("/api/audit", auditHandler, upstreammiddleware.RequireAuth),
 
     // /debug/ping: a route with a completely separate, downstream-only
-    // auth scheme (requireDownstreamKey, a plain header check unrelated
-    // to upstream's Bearer token). Takes the router directly -- no
-    // upstream helper involved at all.
+    // auth scheme (pkg/middleware.RequireDownstreamKey, a plain header
+    // check unrelated to upstream's Bearer token). Takes the router
+    // directly -- no upstream helper involved at all.
     func(r chi.Router) {
         r.Route("/debug", func(r chi.Router) {
-            r.Use(requireDownstreamKey)
+            r.Use(downstreammiddleware.RequireDownstreamKey)
             r.Get("/ping", pingHandler)
         })
     },
@@ -96,9 +100,17 @@ its counts reflect downstream's `CreateSandbox` behavior too.
 | Change needed | Pattern | Handler / middleware |
 |---|---|---|
 | None | Reuse upstream service directly | Reuse upstream handler directly (`../downstream-reuse`) |
-| Behavior change, same method signature | Embed + override (`pkg/sandbox`) | Reuse upstream handler unmodified |
+| Behavior change, same method signature | Embed + override (`pkg/services/sandbox.go`) | Reuse upstream handler unmodified |
 | A genuinely new route/capability upstream doesn't have | Compose existing service methods (or add a new interface) | New handler, attached via `server.WithRoutes` (`pkg/audit`) |
 | A route needing different auth/logging than upstream's | N/A | `server.Option` as a raw `func(chi.Router)` with its own middleware (`/debug/ping`) |
+
+## Package naming
+
+Both this module and upstream have a package literally named `services`
+(`pkg/services`, one flat package per module, one file per domain) — they
+just live in different Go modules, so there's no collision. Every import
+site in this repo aliases one or both explicitly (`upstreamservices`,
+`downstreamservices`) purely for readability, not because Go requires it.
 
 ## Local dev without a published upstream version
 

@@ -5,9 +5,9 @@
 //
 // This is the third case from the architecture doc's decision table: "a
 // genuinely new method/route upstream doesn't have." Unlike the
-// CreateSandbox override in ../sandbox, this isn't a decorated service --
+// CreateSandbox override in ../services, this isn't a decorated service --
 // it's a brand new handler, attached to upstream's server via the
-// server.WithHandler extensibility hook rather than by upstream needing to
+// server.WithRoutes extensibility hook rather than by upstream needing to
 // know this domain exists.
 package audit
 
@@ -15,27 +15,19 @@ import (
 	"encoding/json"
 	"net/http"
 
-	upstreamsandbox "github.com/d0w/openshell-bff-examples/upstream/pkg/services/sandbox"
+	upstreamservices "github.com/d0w/openshell-bff-examples/upstream/pkg/services"
 
 	"github.com/go-chi/chi/v5"
 )
 
-// Handler exposes audit endpoints over a SandboxService. It depends only
-// on upstream's public SandboxService interface, so it works the same
-// whether it's handed the plain upstream service or downstream's decorated
-// one.
 type Handler struct {
-	sandboxService upstreamsandbox.SandboxService
+	sandboxService upstreamservices.SandboxService
 }
 
-// NewHandler constructs an audit Handler backed by the given service.
-func NewHandler(svc upstreamsandbox.SandboxService) *Handler {
+func NewHandler(svc upstreamservices.SandboxService) *Handler {
 	return &Handler{sandboxService: svc}
 }
 
-// RegisterRoutes satisfies server.RouteRegistrar. Upstream's NewServer
-// calls this the same way it calls its own handlers' RegisterRoutes --
-// it has no idea "audit" exists as a concept.
 func (h *Handler) RegisterRoutes(r chi.Router) {
 	r.Get("/sandboxes", h.SandboxStats)
 }
@@ -45,7 +37,6 @@ type sandboxStats struct {
 	ByStatus map[string]int `json:"byStatus"`
 }
 
-// SandboxStats returns a count of sandboxes, broken down by status.
 func (h *Handler) SandboxStats(w http.ResponseWriter, r *http.Request) {
 	list, err := h.sandboxService.ListSandboxes(r.Context())
 	if err != nil {

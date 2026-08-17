@@ -30,11 +30,10 @@ import (
 	downstreammiddleware "github.com/d0w/openshell-bff-examples/downstream-partialreuse/pkg/middleware"
 	upstreammiddleware "github.com/d0w/openshell-bff-examples/upstream/pkg/middleware"
 	"github.com/d0w/openshell-bff-examples/upstream/pkg/server"
-	gateway "github.com/d0w/openshell-bff-examples/upstream/pkg/services/gateway"
-	upstreamsandbox "github.com/d0w/openshell-bff-examples/upstream/pkg/services/sandbox"
+	upstreamservices "github.com/d0w/openshell-bff-examples/upstream/pkg/services"
 
 	"github.com/d0w/openshell-bff-examples/downstream-partialreuse/pkg/audit"
-	downstreamsandbox "github.com/d0w/openshell-bff-examples/downstream-partialreuse/pkg/sandbox"
+	downstreamservices "github.com/d0w/openshell-bff-examples/downstream-partialreuse/pkg/services"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -56,11 +55,11 @@ func main() {
 
 	// Base sandbox service is upstream's own default implementation --
 	// downstream doesn't reimplement storage, it just wraps it.
-	baseSandboxSvc := upstreamsandbox.NewDefaultSandboxService()
-	decoratedSandboxSvc := downstreamsandbox.NewService(baseSandboxSvc)
+	baseSandboxSvc := upstreamservices.NewDefaultSandboxService()
+	decoratedSandboxSvc := downstreamservices.NewService(baseSandboxSvc)
 
 	svcs := server.Services{
-		Gateway: gateway.NewDefaultGatewayService(),
+		Gateway: upstreamservices.NewDefaultGatewayService(),
 		Sandbox: decoratedSandboxSvc,
 	}
 

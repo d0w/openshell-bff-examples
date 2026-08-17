@@ -5,19 +5,19 @@ import (
 	"log/slog"
 	"net/http"
 
-	gateway "github.com/d0w/openshell-bff-examples/upstream/pkg/services/gateway"
+	"github.com/d0w/openshell-bff-examples/upstream/pkg/services"
 
 	"github.com/go-chi/chi/v5"
 )
 
 // GatewayHandler exposes HTTP endpoints for gateway operations.
 type GatewayHandler struct {
-	*Handler                              // gives access to h.logger and other shared fields
-	gatewayService gateway.GatewayService // service interface
+	*Handler                               // gives access to h.logger and other shared fields
+	gatewayService services.GatewayService // service interface
 }
 
 // NewGatewayHandler constructs a GatewayHandler backed by the given service.
-func NewGatewayHandler(svc gateway.GatewayService) *GatewayHandler {
+func NewGatewayHandler(svc services.GatewayService) *GatewayHandler {
 	return &GatewayHandler{
 		Handler:        &Handler{logger: slog.Default()},
 		gatewayService: svc,

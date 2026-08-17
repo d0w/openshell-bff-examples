@@ -11,8 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 
-	gateway "github.com/d0w/openshell-bff-examples/upstream/pkg/services/gateway"
-	sandbox "github.com/d0w/openshell-bff-examples/upstream/pkg/services/sandbox"
+	"github.com/d0w/openshell-bff-examples/upstream/pkg/services"
 )
 
 type ServerConfig struct {
@@ -27,8 +26,8 @@ type Server struct {
 }
 
 type Services struct {
-	Gateway gateway.GatewayService
-	Sandbox sandbox.SandboxService
+	Gateway services.GatewayService
+	Sandbox services.SandboxService
 }
 
 // Option customizes the router NewServer builds. It's handed the root

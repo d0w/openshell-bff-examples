@@ -11,8 +11,7 @@ import (
 	"time"
 
 	"github.com/d0w/openshell-bff-examples/upstream/pkg/server"
-	gateway "github.com/d0w/openshell-bff-examples/upstream/pkg/services/gateway"
-	sandbox "github.com/d0w/openshell-bff-examples/upstream/pkg/services/sandbox"
+	"github.com/d0w/openshell-bff-examples/upstream/pkg/services"
 )
 
 func main() {
@@ -31,8 +30,8 @@ func main() {
 	}
 
 	svcs := server.Services{
-		Gateway: gateway.NewDefaultGatewayService(),
-		Sandbox: sandbox.NewDefaultSandboxService(),
+		Gateway: services.NewDefaultGatewayService(),
+		Sandbox: services.NewDefaultSandboxService(),
 	}
 
 	srv := server.NewServer(cfg, svcs)

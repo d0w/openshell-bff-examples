@@ -21,9 +21,11 @@ curl -H "Authorization: Bearer secret-token" localhost:8080/api/gateway/
 
 ## What's here
 
-- `pkg/services/gateway`, `pkg/services/sandbox` — public interface +
-  default in-memory implementation each. Sandbox is plain CRUD
-  (Create/Get/List/Delete).
+- `pkg/services` — one flat package, one file per domain
+  (`gateway.go`, `sandbox.go`). Each defines a public interface + a
+  default in-memory implementation. Sandbox is plain CRUD
+  (Create/Get/List/Delete). No per-domain subpackages, so consumers import
+  it once as `services` instead of aliasing multiple same-named packages.
 - `pkg/handlers` — HTTP handlers depending only on the service interfaces,
   never the concrete structs.
 - `pkg/server` — `NewServer(cfg, Services, ...Option)` wires handlers to
