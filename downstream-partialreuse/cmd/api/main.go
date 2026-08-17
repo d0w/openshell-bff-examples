@@ -1,89 +1,114 @@
-package api
+// Package main is a downstream BFF that reuses most of upstream's code
+// unmodified (server.NewServer, Services, SandboxHandler,
+// NewDefaultGatewayService) and demonstrates two extension mechanisms on
+// top of it:
+//
+//   - Interface decoration: pkg/sandbox.Service embeds upstream's
+//     SandboxService and overrides CreateSandbox; Get/List/Delete are
+//     inherited untouched. Upstream's SandboxHandler is reused as-is since
+//     the interface's shape didn't change.
+//   - A brand new handler with its own middleware stack: pkg/audit.Handler
+//     exposes a capability (sandbox stats) that has no equivalent in
+//     upstream at all. It's attached via server.WithRoutes, upstream's
+//     extensibility hook -- Option gets the raw chi.Router, so this file
+//     decides the middleware, not upstream. Below, /api/audit reuses
+//     upstream's exported middleware.RequireAuth; /debug/ping uses a
+//     completely separate, downstream-only auth scheme, to show both are
+//     equally possible with no special-casing on upstream's side.
+package main
 
 import (
 	"context"
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	downstreammiddleware "github.com/d0w/openshell-bff-examples/downstream-partialreuse/pkg/middleware"
+	upstreammiddleware "github.com/d0w/openshell-bff-examples/upstream/pkg/middleware"
+	"github.com/d0w/openshell-bff-examples/upstream/pkg/server"
+	gateway "github.com/d0w/openshell-bff-examples/upstream/pkg/services/gateway"
+	upstreamsandbox "github.com/d0w/openshell-bff-examples/upstream/pkg/services/sandbox"
+
+	"github.com/d0w/openshell-bff-examples/downstream-partialreuse/pkg/audit"
+	downstreamsandbox "github.com/d0w/openshell-bff-examples/downstream-partialreuse/pkg/sandbox"
+
 	"github.com/go-chi/chi/v5"
-	upstreamServer "github.com/myorg/upstream-bff/pkg/server"
-	upstreamServices "github.com/myorg/upstream-bff/pkg/services"
 )
 
-// Downstream Custom Handler for brand new endpoints
-type DownstreamCustomHandler struct{}
-
-func (h *DownstreamCustomHandler) RegisterRoutes(r chi.Router) {
-	r.Get("/analytics", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"status": "analytics data"}`))
-	})
-}
-
 func main() {
-	// 1. Instantiate Upstream Services (or custom downstream overrides)
-	baseGateway := upstreamServices.NewGatewayService()
-	baseProvider := upstreamServices.NewProviderService()
+	logger := slog.Default()
 
-	// Optional: Decorate or override a service
-	customProvider := &DownstreamProviderService{Provider: baseProvider}
-
-	svcs := upstreamServer.Services{
-		Gateway:  baseGateway,
-		Provider: customProvider, // Custom override
-		Sandbox:  upstreamServices.NewSandboxService(),
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
 	}
 
-	// 2. Build the Base Upstream Chi Router
-	router := upstreamServices.NewUpstreamRouter(svcs)
-
-	// 3. EXTENSIBILITY: Downstream adds custom routes directly to the router!
-	// Option A: Add a brand new top-level subroute group
-	customHandler := &DownstreamCustomHandler{}
-	router.Route("/api/custom", customHandler.RegisterRoutes)
-
-	// Option B: Inject custom endpoints directly into an existing upstream route path
-	router.Route("/api/gateway", customHandler.RegisterRoutes)
-
-	// 4. Downstream configures and owns the http.Server instance
-	httpServer := &http.Server{
-		Addr:         ":8080",
-		Handler:      router, // Passes the fully composed Chi router
-		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 10 * time.Second,
+	cfg := server.ServerConfig{
+		Port:         ":" + port,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 15 * time.Second,
+		IdleTimeout:  60 * time.Second,
 	}
 
-	// can write goroutines here for soft termination or server close operations
+	// Base sandbox service is upstream's own default implementation --
+	// downstream doesn't reimplement storage, it just wraps it.
+	baseSandboxSvc := upstreamsandbox.NewDefaultSandboxService()
+	decoratedSandboxSvc := downstreamsandbox.NewService(baseSandboxSvc)
+
+	svcs := server.Services{
+		Gateway: gateway.NewDefaultGatewayService(),
+		Sandbox: decoratedSandboxSvc,
+	}
+
+	// auditHandler is a downstream-only route that doesn't exist in
+	// upstream at all. It reads through the same decorated sandbox service
+	// everything else uses, so its stats reflect downstream's
+	// CreateSandbox behavior too.
+	auditHandler := audit.NewHandler(decoratedSandboxSvc)
+
+	srv := server.NewServer(
+		cfg, svcs,
+		server.WithRoutes("/api/audit", auditHandler, upstreammiddleware.RequireAuth),
+
+		// Mount at /debug/ping with a completely separate, downstream-only
+		// auth scheme. server.Option is handed the raw router, so this
+		// isn't a special case upstream had to account for -- it's just a
+		// route group with its own middleware, like any chi router.
+		func(r chi.Router) {
+			r.Route("/debug", func(r chi.Router) {
+				r.Use(downstreammiddleware.RequireDownstreamKey)
+				r.Get("/ping", func(w http.ResponseWriter, r *http.Request) {
+					w.Write([]byte("pong"))
+				})
+			})
+		},
+	)
+
 	go func() {
-		log.Println("Server starting on :8080...")
-		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("HTTP server failed unexpectedly: %v", err)
+		logger.Info("starting server", "addr", cfg.Port)
+		if err := srv.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("server error", "error", err)
+			os.Exit(1)
 		}
 	}()
 
-	stopChan := make(chan os.Signal, 1)
-	signal.Notify(stopChan, os.Interrupt, syscall.SIGTERM)
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	<-stop
 
-	sig := <-stopChan
-	log.Printf("Received signal: %v. Initiating soft termination...\n", sig)
+	logger.Info("shutting down server")
 
-	// timeout for closing server
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// 5. Shutdown the HTTP server (stops accepting new connections, finishes active ones)
-	if err := httpServer.Shutdown(shutdownCtx); err != nil {
-		log.Printf("HTTP server forced to shutdown: %v", err)
-	} else {
-		log.Println("HTTP server stopped gracefully.")
+	if err := srv.Shutdown(ctx); err != nil {
+		logger.Error("graceful shutdown failed", "error", err)
+		os.Exit(1)
 	}
 
-	// 6. Perform extra downstream/upstream teardown tasks here
-	performCustomTeardown()
-
-	log.Println("Process exited cleanly.")
+	logger.Info("server stopped")
 }

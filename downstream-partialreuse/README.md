@@ -1,146 +1,107 @@
-# downstream-bff — a real, separate consumer of backend-v2
+# downstream-partialreuse
 
-**WARNING: VIBECODED. ONLY FOR DEMONSTRATION PURPOSES**
+A downstream BFF that reuses most of upstream's code, but demonstrates two
+ways to diverge from it: decorating a service, and attaching a brand new
+handler upstream has no concept of.
 
-## To test
+## Run
 
 ```
-go run cmd/api
+PORT=8083 go run ./cmd/api
+curl -H "Authorization: Bearer secret-token" -X POST localhost:8083/api/sandbox/ -d '{"name":"my-box"}'
+curl -H "Authorization: Bearer secret-token" localhost:8083/api/audit/sandboxes
+curl -H "X-Downstream-Key: downstream-secret" localhost:8083/debug/ping
 ```
 
-Making requests to `localhost:8081` with any Bearer Token auth will work.
+Create response — compare to upstream's `{"name":"my-box","status":"running"}`:
+`{"name":"my-box (downstream-managed)","status":"provisioning"}`.
 
-- `POST localhost:8081/api/v1/workspaces/test/sandboxes/wow/restart`
-  - This is one of the example routes that is an extra implementation in downstream, but doesn't exist in upstream.
+`/api/audit/sandboxes` returns `{"total":N,"byStatus":{...}}` — 404 on
+upstream, since it doesn't exist there.
 
-## Description
+`/debug/ping` returns `pong`, but only with `X-Downstream-Key:
+downstream-secret` — upstream's `Authorization: Bearer secret-token`
+does **not** work here, on purpose (see below).
 
-This is what "downstream reuses the BFF" looks like when downstream is a
-genuinely different Go module (different repo/team in a real setup), not
-just a package inside `backend-v2`. It's a second, independently
-deployable BFF that depends on `backend-v2` as a library.
+## How it works
 
-Standalone Go module — see "Building this right now" below for why it
-builds without `backend-v2` being published anywhere yet.
-
-## What it does differently from backend-v2
-
-- **Sandbox**: adds a per-workspace sandbox quota (`SANDBOX_QUOTA_PER_WORKSPACE`,
-  default 2, `pkg/sandboxes.QuotaEnforcer`) AND a `RestartSandbox` capability
-  that doesn't exist on backend-v2 at all (`pkg/sandboxes.ExtendedService` /
-  `NewRestarter`) — exposed as `POST .../sandboxes/{name}/restart`.
-- **Provider**: no customization; reuses `backend-v2/pkg/provider.NewProviderHandler`
-  directly — no local package for it at all.
-- **Auth**: none — reuses `backend-v2/pkg/auth` wholesale. Same relay model,
-  same middleware, zero reimplementation.
-- **Gateway**: reuses `backend-v2/pkg/gateway.Fake` wholesale for the demo;
-  a real deployment would construct a real gRPC client the same way
-  backend-v2's own `cmd/api/main.go` would.
-
-## Two consumption patterns, side by side
-
-**Provider — reuse upstream's handler unmodified.** No local package, no
-local interface:
+`pkg/sandbox/decorator.go` embeds `upstreamsandbox.SandboxService` and
+overrides only `CreateSandbox`:
 
 ```go
-// cmd/api/main.go
-providerService := upstreamprovider.NewService(gw)
-providerHandler := upstreamprovider.NewProviderHandler(base, providerService)
-```
+type Service struct {
+    upstreamsandbox.SandboxService // embedded — inherits Get/List/Delete as-is
+    logger *slog.Logger
+}
 
-This is the default: if a domain needs no new capability and no behavior
-change, there's nothing to write. Reuse backend-v2's exported
-`Service`/`Handler` pair as-is.
-
-**Sandbox — rewritten handler, because it needs a method upstream doesn't
-have.** `RestartSandbox` isn't part of `backend-v2/pkg/sandbox.Service` and
-never will be — it's not upstream's concern. So this BFF declares its own
-superset interface (`pkg/sandboxes/restart.go`):
-
-```go
-type ExtendedService interface {
-    sandbox.Service          // embeds upstream's interface — inherits its 4 methods
-    RestartSandbox(ctx context.Context, workspace, name string) error
+func (s *Service) CreateSandbox(ctx context.Context, name string) (*upstreamsandbox.Sandbox, error) {
+    sb, err := s.SandboxService.CreateSandbox(ctx, name) // delegate to upstream
+    // ...tag it, change status...
+    return sb, err
 }
 ```
 
-`restarter` implements the new method by composing upstream's *existing*
-methods (`Get` → `Delete` → `Create`) — no upstream API change was needed
-to add this feature at all. `pkg/sandboxes/handler.go` depends on
-`ExtendedService`, not `sandbox.Service`, and registers one extra route
-(`/restart`) that calls the new method. This is *why* the handler had to be
-rewritten rather than reused: `backend-v2.SandboxHandler` has no field, no
-route, and no way to reach a method it doesn't know exists.
+`GetSandbox`, `ListSandboxes`, and `DeleteSandbox` are never redefined —
+calls fall straight through to the embedded upstream implementation. Try
+`GET /api/sandbox/sandbox-1` after creating one: it returns the decorated
+object, proving the override's effect persists through an inherited method
+that downstream never touched.
 
-Composition in `main.go` — decorators stack, each stage's output type
-matching the next stage's input:
+`cmd/api/main.go` reuses upstream's `server.NewServer`, `Services` struct,
+and `SandboxHandler` completely unmodified — it only swaps in the
+decorated service:
 
 ```go
-var sandboxService sandbox.Service = sandbox.NewService(gw)               // backend-v2 default impl
-sandboxService = sandboxes.NewQuotaEnforcer(sandboxService, limit)        // still sandbox.Service
-extendedSandboxService := sandboxes.NewRestarter(sandboxService)          // now ExtendedService
-sandboxHandler := sandboxes.NewHandler(base, extendedSandboxService)      // needs ExtendedService
+base := upstreamsandbox.NewDefaultSandboxService()
+decorated := downstreamsandbox.NewService(base)
+svcs := server.Services{Gateway: gateway.NewDefaultGatewayService(), Sandbox: decorated}
 ```
 
-Verified: quota is still enforced *through* a restart (it internally
-deletes then re-creates, both of which still flow through
-`QuotaEnforcer`), and `RestartSandbox` works even though `backend-v2`
-has zero knowledge it exists.
+Gateway isn't customized at all here, same as `../downstream-reuse`.
 
-## The rule this leaves us with
+## New handlers, each with their own middleware stack
 
-- **No new capability, no behavior change** → reuse upstream's
-  `Service`/`Handler` directly. (Provider.)
-- **Behavior change on an existing method, same signature** → decorate
-  `sandbox.Service` (embed it, override the methods that change). Upstream's
-  handler still works unmodified since `Service`'s *shape* didn't change.
-  (Quota — `CreateSandbox`/`DeleteSandbox` still have the same signatures.)
-- **A genuinely new method** → declare a local interface that embeds
-  upstream's and adds it, decorate up to that new interface, and write a
-  (small) handler against the new interface for the routes upstream's
-  handler structurally cannot expose. (Restart.)
+`server.Option` is handed the raw `chi.Router` — upstream imposes no
+required auth, route grouping, or flags. `main.go` uses this two ways:
 
-Only the third case requires both a new interface *and* a rewritten
-handler. The first two need neither.
+```go
+srv := server.NewServer(cfg, svcs,
+    // pkg/audit.Handler: a new capability (sandbox stats) with no
+    // upstream equivalent, built purely by composing upstream's existing
+    // SandboxService.ListSandboxes. Mounted at /api/audit reusing
+    // upstream's own middleware.RequireAuth.
+    server.WithRoutes("/api/audit", auditHandler, upstreammiddleware.RequireAuth),
 
-## Building this right now: `go.work`
-
-`backend-v2` hasn't cut a release yet — there's no tag to pin to over the
-network. `downstream-bff/go.mod` still has a normal `require` line:
-
-```
-require github.com/Gkrumbach07/openshell-dashboard/backend-v2 v0.1.0
-```
-
-That version doesn't exist on the module proxy yet, so on its own this
-wouldn't resolve. What makes `go build` work today is `../go.work` (repo
-root):
-
-```
-go 1.26.5
-
-use (
-    ./backend-v2
-    ./downstream-bff
+    // /debug/ping: a route with a completely separate, downstream-only
+    // auth scheme (requireDownstreamKey, a plain header check unrelated
+    // to upstream's Bearer token). Takes the router directly -- no
+    // upstream helper involved at all.
+    func(r chi.Router) {
+        r.Route("/debug", func(r chi.Router) {
+            r.Use(requireDownstreamKey)
+            r.Get("/ping", pingHandler)
+        })
+    },
 )
 ```
 
-Go workspace mode (`go.work`) is the standard mechanism for developing
-multiple modules in the same checkout together: any module listed in `use`
-is resolved from local source, regardless of what version its dependents
-require. It's local-only and doesn't touch either module's `go.mod`/
-`go.sum` — CI or any other clone without a `go.work` file resolves
-`backend-v2` the normal way (a real, checksummed, tagged version), which is
-exactly the versioning story below.
+Both are equally valid `Option`s; upstream's `NewServer` doesn't special-case
+either. `audit.Handler` only needs a `RegisterRoutes(chi.Router)` method —
+no upstream interface to implement, no field on `server.Services`. It
+reads through the same decorated sandbox service as everything else, so
+its counts reflect downstream's `CreateSandbox` behavior too.
 
-## How upstream (backend-v2) makes itself pinnable
+## When to use which pattern
 
-See `../backend-v2/README.md`'s "Publishing a pinnable version" section for
-the full mechanism (git tag format for a subdirectory module, the Go Import
-Compatibility Rule for breaking changes, `gorelease`, private-module
-`GOPRIVATE` setup). Short version: once `backend-v2/v0.1.0` is tagged and
-pushed to `origin`, delete (or `GOWORK=off`) this workspace file and the
-`require` line above resolves for real — `go mod tidy` fetches it from the
-module proxy and records its checksum in `go.sum`, and this module never
-sees a change in `backend-v2` again until someone deliberately runs
-`go get -u`.
+| Change needed | Pattern | Handler / middleware |
+|---|---|---|
+| None | Reuse upstream service directly | Reuse upstream handler directly (`../downstream-reuse`) |
+| Behavior change, same method signature | Embed + override (`pkg/sandbox`) | Reuse upstream handler unmodified |
+| A genuinely new route/capability upstream doesn't have | Compose existing service methods (or add a new interface) | New handler, attached via `server.WithRoutes` (`pkg/audit`) |
+| A route needing different auth/logging than upstream's | N/A | `server.Option` as a raw `func(chi.Router)` with its own middleware (`/debug/ping`) |
+
+## Local dev without a published upstream version
+
+`go.mod` uses a `replace` directive pointing at `../upstream` (see the
+comment on that line). Once upstream tags a release, drop the `replace`
+and pin the `require` to the real version.

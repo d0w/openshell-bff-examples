@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 
-	gateway "github.com/d0w/openshell-bff-examples/pkg/services/gateway"
+	gateway "github.com/d0w/openshell-bff-examples/upstream/pkg/services/gateway"
 
 	"github.com/go-chi/chi/v5"
 )

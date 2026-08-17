@@ -37,7 +37,6 @@ func main() {
 
 	srv := server.NewServer(cfg, svcs)
 
-	// Run the server in a goroutine so it doesn't block signal handling.
 	go func() {
 		logger.Info("starting server", "addr", cfg.Port)
 		if err := srv.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -46,7 +45,6 @@ func main() {
 		}
 	}()
 
-	// Wait for an interrupt/termination signal.
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	<-stop
