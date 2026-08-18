@@ -7,14 +7,16 @@
 //     SandboxService and overrides CreateSandbox; Get/List/Delete are
 //     inherited untouched. Upstream's SandboxHandler is reused as-is since
 //     the interface's shape didn't change.
-//   - A brand new handler with its own middleware stack: pkg/audit.Handler
-//     exposes a capability (sandbox stats) that has no equivalent in
-//     upstream at all. It's attached via server.WithRoutes, upstream's
+//   - Brand new handlers, each with no upstream equivalent: pkg/handlers
+//     holds AuditHandler (sandbox stats) and UptimeHandler (sandbox
+//     uptime, consuming the downstream-only SandboxUptimeService
+//     interface). Each is attached via server.WithRoutes, upstream's
 //     extensibility hook -- Option gets the raw chi.Router, so this file
-//     decides the middleware, not upstream. Below, /api/audit reuses
-//     upstream's exported middleware.RequireAuth; /debug/ping uses a
-//     completely separate, downstream-only auth scheme, to show both are
-//     equally possible with no special-casing on upstream's side.
+//     decides the middleware, not upstream. Below, /api/audit and
+//     /api/sandbox-uptime reuse upstream's exported middleware.RequireAuth;
+//     /debug/ping uses a completely separate, downstream-only auth scheme,
+//     to show both are equally possible with no special-casing on
+//     upstream's side.
 package main
 
 import (
@@ -32,7 +34,7 @@ import (
 	"github.com/d0w/openshell-bff-examples/upstream/pkg/server"
 	upstreamservices "github.com/d0w/openshell-bff-examples/upstream/pkg/services"
 
-	"github.com/d0w/openshell-bff-examples/downstream-partialreuse/pkg/audit"
+	"github.com/d0w/openshell-bff-examples/downstream-partialreuse/pkg/handlers"
 	downstreamservices "github.com/d0w/openshell-bff-examples/downstream-partialreuse/pkg/services"
 
 	"github.com/go-chi/chi/v5"
@@ -67,11 +69,18 @@ func main() {
 	// upstream at all. It reads through the same decorated sandbox service
 	// everything else uses, so its stats reflect downstream's
 	// CreateSandbox behavior too.
-	auditHandler := audit.NewHandler(decoratedSandboxSvc)
+	auditHandler := handlers.NewAuditHandler(decoratedSandboxSvc)
+
+	// extendedSandboxSvc stacks a second decorator on top of the first
+	extendedSandboxSvc := downstreamservices.NewExtendedService(decoratedSandboxSvc)
+	uptimeHandler := handlers.NewUptimeHandler(extendedSandboxSvc)
 
 	srv := server.NewServer(
 		cfg, svcs,
+
+		// custom routes
 		server.WithRoutes("/api/audit", auditHandler, upstreammiddleware.RequireAuth),
+		server.WithRoutes("/api/sandbox-uptime", uptimeHandler, upstreammiddleware.RequireAuth),
 
 		// Mount at /debug/ping with a completely separate, downstream-only
 		// auth scheme. server.Option is handed the raw router, so this

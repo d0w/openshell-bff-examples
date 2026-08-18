@@ -14,12 +14,7 @@ type Service struct {
 	logger                          *slog.Logger
 }
 
-// NewService wraps base (typically upstream's default implementation) with
-// downstream-specific CreateSandbox behavior. The returned value still
-// satisfies upstreamservices.SandboxService, so it can be handed to
-// upstream's own NewSandboxHandler / server.Services without either of
-// those knowing decoration happened.
-func NewService(base upstreamservices.SandboxService) upstreamservices.SandboxService {
+func NewService(base upstreamservices.SandboxService) *Service {
 	return &Service{
 		SandboxService: base,
 		logger:         slog.Default(),

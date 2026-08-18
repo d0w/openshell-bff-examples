@@ -10,6 +10,7 @@ handler upstream has no concept of.
 PORT=8083 go run ./cmd/api
 curl -H "Authorization: Bearer secret-token" -X POST localhost:8083/api/sandbox/ -d '{"name":"my-box"}'
 curl -H "Authorization: Bearer secret-token" localhost:8083/api/audit/sandboxes
+curl -H "Authorization: Bearer secret-token" localhost:8083/api/sandbox-uptime/sandbox-1
 curl -H "X-Downstream-Key: downstream-secret" localhost:8083/debug/ping
 ```
 
@@ -63,18 +64,67 @@ svcs := server.Services{Gateway: upstreamservices.NewDefaultGatewayService(), Sa
 
 Gateway isn't customized at all here, same as `../downstream-reuse`.
 
+## Extending vs. overriding via embedding
+
+`pkg/services/sandbox_extended.go` shows the other side of interface
+embedding: adding a capability instead of changing one.
+
+```go
+type SandboxUptimeService interface {
+    upstreamservices.SandboxService
+    SandboxUptime(ctx context.Context, id string) (time.Duration, error)
+}
+
+type ExtendedService struct {
+    upstreamservices.SandboxService // embedded -- all 4 methods inherited untouched
+}
+
+func (s *ExtendedService) SandboxUptime(ctx context.Context, id string) (time.Duration, error) {
+    sb, err := s.GetSandbox(ctx, id) // inherited call, not overridden
+    // ...
+}
+```
+
+Unlike `Service` above, `ExtendedService` implements none of
+`SandboxService`'s methods itself -- it only adds `SandboxUptime`, built
+out of the embedded interface's existing `GetSandbox`.
+
+`SandboxUptime` has no upstream equivalent, so there's no upstream
+interface to reuse for it -- `SandboxUptimeService` is downstream's own
+interface, embedding `upstreamservices.SandboxService` so it's a superset
+of (not a parallel contract to) the original. `pkg/handlers.UptimeHandler`
+depends on `SandboxUptimeService`, never on the concrete `*ExtendedService`
+-- same "accept interfaces" discipline as upstream's own handlers, just
+with an interface downstream had to define itself because the capability
+is downstream's:
+
+```go
+extendedSandboxSvc := downstreamservices.NewExtendedService(decoratedSandboxSvc)
+uptimeHandler := handlers.NewUptimeHandler(extendedSandboxSvc)
+```
+
+`extendedSandboxSvc` wraps `decoratedSandboxSvc` (itself already wrapping
+upstream's base service), so `GET /api/sandbox-uptime/{id}` reflects
+downstream's `CreateSandbox` decoration too -- three layers of embedding
+composing cleanly because each only depends on the interface below it.
+
 ## New handlers, each with their own middleware stack
 
 `server.Option` is handed the raw `chi.Router` — upstream imposes no
-required auth, route grouping, or flags. `main.go` uses this two ways:
+required auth, route grouping, or flags. `main.go` uses this three ways:
 
 ```go
 srv := server.NewServer(cfg, svcs,
-    // pkg/audit.Handler: a new capability (sandbox stats) with no
+    // pkg/handlers.AuditHandler: a new capability (sandbox stats) with no
     // upstream equivalent, built purely by composing upstream's existing
     // SandboxService.ListSandboxes. Mounted at /api/audit reusing
     // upstream's own middleware.RequireAuth.
     server.WithRoutes("/api/audit", auditHandler, upstreammiddleware.RequireAuth),
+
+    // pkg/handlers.UptimeHandler: another new capability, depending on
+    // downstream's own SandboxUptimeService interface. Also reuses
+    // upstream's middleware.RequireAuth.
+    server.WithRoutes("/api/sandbox-uptime", uptimeHandler, upstreammiddleware.RequireAuth),
 
     // /debug/ping: a route with a completely separate, downstream-only
     // auth scheme (pkg/middleware.RequireDownstreamKey, a plain header
@@ -89,11 +139,15 @@ srv := server.NewServer(cfg, svcs,
 )
 ```
 
-Both are equally valid `Option`s; upstream's `NewServer` doesn't special-case
-either. `audit.Handler` only needs a `RegisterRoutes(chi.Router)` method —
-no upstream interface to implement, no field on `server.Services`. It
-reads through the same decorated sandbox service as everything else, so
-its counts reflect downstream's `CreateSandbox` behavior too.
+All three are equally valid `Option`s; upstream's `NewServer` doesn't
+special-case any of them. `AuditHandler` and `UptimeHandler` each only need
+a `RegisterRoutes(chi.Router)` method — no upstream interface to
+implement, no field on `server.Services`. Both live in `pkg/handlers`,
+mirroring how upstream keeps `GatewayHandler`/`SandboxHandler` together in
+its own `pkg/handlers` — one package per BFF for its HTTP layer, one file
+per handler within it. `AuditHandler` reads through the same decorated
+sandbox service as everything else, so its counts reflect downstream's
+`CreateSandbox` behavior too.
 
 ## When to use which pattern
 
@@ -101,7 +155,8 @@ its counts reflect downstream's `CreateSandbox` behavior too.
 |---|---|---|
 | None | Reuse upstream service directly | Reuse upstream handler directly (`../downstream-reuse`) |
 | Behavior change, same method signature | Embed + override (`pkg/services/sandbox.go`) | Reuse upstream handler unmodified |
-| A genuinely new route/capability upstream doesn't have | Compose existing service methods (or add a new interface) | New handler, attached via `server.WithRoutes` (`pkg/audit`) |
+| New method alongside unchanged existing ones | Embed + extend, define your own interface for the new method (`pkg/services/sandbox_extended.go`) | New handler depending on the new interface, attached via `server.WithRoutes` (`pkg/handlers.UptimeHandler`) |
+| A genuinely new route/capability upstream doesn't have | Compose existing service methods (or add a new interface) | New handler, attached via `server.WithRoutes` (`pkg/handlers.AuditHandler`) |
 | A route needing different auth/logging than upstream's | N/A | `server.Option` as a raw `func(chi.Router)` with its own middleware (`/debug/ping`) |
 
 ## Package naming

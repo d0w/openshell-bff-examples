@@ -26,7 +26,14 @@ type SandboxService interface {
 	DeleteSandbox(ctx context.Context, id string) error
 }
 
-type sandboxService struct {
+// DefaultSandboxService is the default in-memory implementation of
+// SandboxService. It's returned as a concrete type (accept interfaces,
+// return structs) -- callers that only need the interface (e.g.
+// server.Services, downstream decorators) get it for free via Go's
+// implicit interface satisfaction, but callers who want the concrete type
+// (e.g. to reach for a future exported method not on the interface) can
+// have it too.
+type DefaultSandboxService struct {
 	mu        sync.Mutex
 	sandboxes map[string]*Sandbox
 	nextID    int
@@ -34,13 +41,13 @@ type sandboxService struct {
 
 // NewDefaultSandboxService returns the default in-memory implementation of
 // SandboxService.
-func NewDefaultSandboxService() SandboxService {
-	return &sandboxService{
+func NewDefaultSandboxService() *DefaultSandboxService {
+	return &DefaultSandboxService{
 		sandboxes: make(map[string]*Sandbox),
 	}
 }
 
-func (s *sandboxService) CreateSandbox(ctx context.Context, name string) (*Sandbox, error) {
+func (s *DefaultSandboxService) CreateSandbox(ctx context.Context, name string) (*Sandbox, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -56,7 +63,7 @@ func (s *sandboxService) CreateSandbox(ctx context.Context, name string) (*Sandb
 	return sb, nil
 }
 
-func (s *sandboxService) GetSandbox(ctx context.Context, id string) (*Sandbox, error) {
+func (s *DefaultSandboxService) GetSandbox(ctx context.Context, id string) (*Sandbox, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -67,7 +74,7 @@ func (s *sandboxService) GetSandbox(ctx context.Context, id string) (*Sandbox, e
 	return sb, nil
 }
 
-func (s *sandboxService) ListSandboxes(ctx context.Context) ([]*Sandbox, error) {
+func (s *DefaultSandboxService) ListSandboxes(ctx context.Context) ([]*Sandbox, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -78,7 +85,7 @@ func (s *sandboxService) ListSandboxes(ctx context.Context) ([]*Sandbox, error) 
 	return out, nil
 }
 
-func (s *sandboxService) DeleteSandbox(ctx context.Context, id string) error {
+func (s *DefaultSandboxService) DeleteSandbox(ctx context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

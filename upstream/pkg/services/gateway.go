@@ -14,23 +14,26 @@ type GatewayService interface {
 	GetGatewayByID(ctx context.Context, id string) (*GatewayInfo, error)
 }
 
-type gatewayService struct {
+// DefaultGatewayService is the default implementation of GatewayService.
+// Returned as a concrete type (accept interfaces, return structs); assigns
+// implicitly to any GatewayService-typed field or param.
+type DefaultGatewayService struct {
 	// fields...
 }
 
-// NewDefaultGatewayService returns the default in-memory implementation of GatewayService.
-func NewDefaultGatewayService() GatewayService {
-	return &gatewayService{}
+// NewDefaultGatewayService returns the default implementation of GatewayService.
+func NewDefaultGatewayService() *DefaultGatewayService {
+	return &DefaultGatewayService{}
 }
 
-func (g *gatewayService) GetGatewayInfo(ctx context.Context) (*GatewayInfo, error) {
+func (g *DefaultGatewayService) GetGatewayInfo(ctx context.Context) (*GatewayInfo, error) {
 	return &GatewayInfo{Name: "default-gateway"}, nil
 }
 
-func (g *gatewayService) ProcessGateway(ctx context.Context, payload map[string]any) (map[string]any, error) {
+func (g *DefaultGatewayService) ProcessGateway(ctx context.Context, payload map[string]any) (map[string]any, error) {
 	return payload, nil
 }
 
-func (g *gatewayService) GetGatewayByID(ctx context.Context, id string) (*GatewayInfo, error) {
+func (g *DefaultGatewayService) GetGatewayByID(ctx context.Context, id string) (*GatewayInfo, error) {
 	return &GatewayInfo{Name: id}, nil
 }
